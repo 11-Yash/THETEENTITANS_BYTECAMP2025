@@ -33,6 +33,8 @@ export default function NGOLogin() {
         // Store NGO data in localStorage
         localStorage.setItem('ngoId', data.id);
         localStorage.setItem('ngoData', JSON.stringify(data));
+        localStorage.setItem('isLoggedIn', 'true');
+        localStorage.setItem('userType', 'ngo');
 
         if (!data.isVerified) {
           try {
@@ -47,26 +49,22 @@ export default function NGOLogin() {
               } else if (verificationData.status === 'pending') {
                 navigate('/verification-pending');
               } else if (verificationData.status === 'rejected') {
-                // navigate('/ngo/verification-pending');
                 alert('Your verification request has been rejected. Please resubmit your documents.');
-              }
-              else if (verificationData.status === 'approved') {
-                alert('Your verification request has been approved. You can now access your dashboard.');
+                navigate('/ngo/verify');
+              } else if (verificationData.status === 'approved') {
                 navigate('/ngo/ngo-dashboard');
-              
-            }} else {
+              }
+            } else {
               console.error('Verification status error:', verificationData);
-              // If there's an error checking verification, default to verification page
-              navigate('/ngo/verification-pending');
+              navigate('/ngo/verify');
             }
           } catch (error) {
             console.error('Error checking verification status:', error);
-            // If there's an error checking verification, default to verification page
-            navigate('/ngo/verification-pending');
+            navigate('/ngo/verify');
           }
         } else {
           // Navigate to NGO dashboard if verified
-          navigate('/ngo/dashboard');
+          navigate('/ngo/ngo-dashboard');
         }
       } else {
         setError(data.error || 'Login failed');

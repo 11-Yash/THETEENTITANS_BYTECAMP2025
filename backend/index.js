@@ -747,6 +747,301 @@ app.get('/api/campaigns/:campaignId/summary', (req, res) => {
   });
 });
 
+// Get Verified NGOs with search
+app.get('/api/ngos/verified', (req, res) => {
+  const searchTerm = req.query.search || '';
+  
+  const query = `
+    SELECT 
+      nu.id,
+      nu.name,
+      nu.email,
+      nu.organization_name,
+      nu.registration_number,
+      nu.phone,
+      nu.address,
+      nu.is_verified,
+      COUNT(DISTINCT c.id) as active_campaigns,
+      COALESCE(SUM(c.current_amount), 0) as total_funds_raised
+    FROM ngo_users nu
+    LEFT JOIN campaigns c ON nu.id = c.ngo_id AND c.status = 'active'
+    WHERE (
+      LOWER(nu.organization_name) LIKE CONCAT('%', LOWER(?), '%')
+      OR LOWER(nu.name) LIKE CONCAT('%', LOWER(?), '%')
+    )
+    GROUP BY nu.id
+    ORDER BY nu.organization_name ASC
+  `;
+
+  connection.query(query, [searchTerm, searchTerm], (err, results) => {
+    if (err) {
+      console.error('Error fetching NGOs:', err);
+      return res.status(500).json({ error: 'Failed to fetch NGOs' });
+    }
+    console.log('Fetched NGOs:', results); // Add logging
+    res.json(results);
+  });
+});
+
+// Get NGO Details
+app.get('/api/ngos/:ngoId', (req, res) => {
+  const ngoId = req.params.ngoId;
+  console.log('Fetching details for NGO ID:', ngoId);
+
+  // First check if the NGO exists
+  const checkNgoQuery = 'SELECT id FROM ngo_users WHERE id = ?';
+  connection.query(checkNgoQuery, [ngoId], (err, checkResults) => {
+    if (err) {
+      console.error('Error checking NGO existence:', err);
+      return res.status(500).json({ 
+        error: 'Database error', 
+        details: err.message,
+        sqlMessage: err.sqlMessage,
+        code: err.code 
+      });
+    }
+
+    if (checkResults.length === 0) {
+      console.log('NGO not found with ID:', ngoId);
+      return res.status(404).json({ error: 'NGO not found' });
+    }
+
+    // If NGO exists, fetch full details including campaigns
+    const query = `
+      SELECT 
+        nu.id,
+        nu.name,
+        nu.email,
+        nu.organization_name,
+        nu.registration_number,
+        nu.phone,
+        nu.address,
+        nu.is_verified,
+        COUNT(DISTINCT CASE WHEN c.status = 'active' THEN c.id END) as active_campaigns,
+        COUNT(DISTINCT c.id) as total_campaigns,
+        COALESCE(SUM(c.current_amount), 0) as total_funds_raised
+      FROM ngo_users nu
+      LEFT JOIN campaigns c ON nu.id = c.ngo_id
+      WHERE nu.id = ?
+      GROUP BY 
+        nu.id, 
+        nu.name, 
+        nu.email, 
+        nu.organization_name, 
+        nu.registration_number, 
+        nu.phone, 
+        nu.address, 
+        nu.is_verified
+    `;
+
+    console.log('Executing NGO details query:', query);
+    console.log('With parameters:', [ngoId]);
+
+    // Execute NGO details query
+    connection.query(query, [ngoId], (err, ngoResults) => {
+      if (err) {
+        console.error('Error fetching NGO details:', {
+          error: err,
+          message: err.message,
+          sqlMessage: err.sqlMessage,
+          code: err.code,
+          query: query,
+          parameters: [ngoId]
+        });
+        return res.status(500).json({ 
+          error: 'Failed to fetch NGO details', 
+          details: err.message,
+          sqlMessage: err.sqlMessage,
+          code: err.code 
+        });
+      }
+
+      if (ngoResults.length === 0) {
+        console.log('No results found for NGO ID:', ngoId);
+        return res.status(404).json({ error: 'NGO not found' });
+      }
+
+      // Remove sensitive information
+      const ngo = ngoResults[0];
+      delete ngo.password;
+
+      // Fetch campaigns for this NGO
+      const campaignsQuery = `
+        SELECT 
+          id,
+          title,
+          description,
+          target_amount,
+          current_amount,
+          start_date,
+          end_date,
+          status,
+          beneficiaries,
+          impact_details,
+          created_at
+        FROM campaigns 
+        WHERE ngo_id = ?
+        ORDER BY created_at DESC
+      `;
+
+      connection.query(campaignsQuery, [ngoId], (err, campaignResults) => {
+        if (err) {
+          console.error('Error fetching NGO campaigns:', err);
+          return res.status(500).json({ 
+            error: 'Failed to fetch NGO campaigns', 
+            details: err.message 
+          });
+        }
+
+        // Add campaigns to NGO data
+        ngo.campaigns = campaignResults;
+        
+        console.log('Successfully fetched NGO details with campaigns:', ngo);
+        res.json(ngo);
+      });
+    });
+  });
+});
+
+// Create donations table if it doesn't exist
+const createDonationsTableQuery = `
+  CREATE TABLE IF NOT EXISTS donations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    campaign_id INT NOT NULL,
+    donor_id INT,
+    amount DECIMAL(10, 2) NOT NULL,
+    payment_method VARCHAR(50) NOT NULL,
+    transaction_id VARCHAR(100),
+    is_anonymous BOOLEAN DEFAULT FALSE,
+    status ENUM('pending', 'completed', 'failed') DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id),
+    FOREIGN KEY (donor_id) REFERENCES donor_users(id)
+  )
+`;
+
+connection.query(createDonationsTableQuery, (err, result) => {
+  if (err) {
+    console.error('Error creating donations table:', err);
+    return;
+  }
+  console.log('Donations table is ready');
+});
+
+// Process Donation
+app.post('/api/donations', async (req, res) => {
+  const { campaignId, amount, paymentMethod, isAnonymous, donorId } = req.body;
+
+  // Validate required fields
+  if (!campaignId || !amount || !paymentMethod) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // Start a transaction
+  connection.beginTransaction(async (err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to start transaction' });
+    }
+
+    try {
+      // Create donation record
+      const createDonationQuery = `
+        INSERT INTO donations 
+        (campaign_id, donor_id, amount, payment_method, is_anonymous, status)
+        VALUES (?, ?, ?, ?, ?, 'pending')
+      `;
+
+      const [donationResult] = await connection.promise().query(
+        createDonationQuery,
+        [campaignId, donorId, amount, paymentMethod, isAnonymous]
+      );
+
+      // Update campaign amount
+      const updateCampaignQuery = `
+        UPDATE campaigns 
+        SET current_amount = current_amount + ?
+        WHERE id = ?
+      `;
+
+      await connection.promise().query(updateCampaignQuery, [amount, campaignId]);
+
+      // Commit transaction
+      connection.commit((err) => {
+        if (err) {
+          return connection.rollback(() => {
+            res.status(500).json({ error: 'Failed to process donation' });
+          });
+        }
+
+        res.status(201).json({
+          message: 'Donation processed successfully',
+          donationId: donationResult.insertId
+        });
+      });
+    } catch (error) {
+      return connection.rollback(() => {
+        res.status(500).json({ error: 'Failed to process donation' });
+      });
+    }
+  });
+});
+
+// Get Donor's Donation History
+app.get('/api/donations/donor/:donorId', (req, res) => {
+  const donorId = req.params.donorId;
+
+  const query = `
+    SELECT 
+      d.*,
+      c.title as campaign_title,
+      nu.organization_name as ngo_name
+    FROM donations d
+    JOIN campaigns c ON d.campaign_id = c.id
+    JOIN ngo_users nu ON c.ngo_id = nu.id
+    WHERE d.donor_id = ?
+    ORDER BY d.created_at DESC
+  `;
+
+  connection.query(query, [donorId], (err, results) => {
+    if (err) {
+      console.error('Error fetching donation history:', err);
+      return res.status(500).json({ error: 'Failed to fetch donation history' });
+    }
+    res.json(results);
+  });
+});
+
+// Get Campaign's Donations
+app.get('/api/donations/campaign/:campaignId', (req, res) => {
+  const campaignId = req.params.campaignId;
+  const showAnonymous = req.query.showAnonymous === 'true';
+
+  const query = `
+    SELECT 
+      d.id,
+      d.amount,
+      d.is_anonymous,
+      d.created_at,
+      CASE 
+        WHEN d.is_anonymous = 0 THEN du.name
+        ELSE 'Anonymous Donor'
+      END as donor_name
+    FROM donations d
+    LEFT JOIN donor_users du ON d.donor_id = du.id
+    WHERE d.campaign_id = ? AND d.status = 'completed'
+    ${showAnonymous ? '' : 'AND d.is_anonymous = 0'}
+    ORDER BY d.created_at DESC
+  `;
+
+  connection.query(query, [campaignId], (err, results) => {
+    if (err) {
+      console.error('Error fetching campaign donations:', err);
+      return res.status(500).json({ error: 'Failed to fetch donations' });
+    }
+    res.json(results);
+  });
+});
+
 // Start the server
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);

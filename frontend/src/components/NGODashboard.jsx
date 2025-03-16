@@ -1,483 +1,276 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
 import {
   Container, Box, Typography, Button, Paper,
   Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField,
-  Grid, Card, CardContent
+  Grid, Card, CardContent, IconButton
 } from '@mui/material';
 
 const NGODashboard = () => {
+  const navigate = useNavigate();
   const [campaigns, setCampaigns] = useState([]);
-  const [openNewCampaign, setOpenNewCampaign] = useState(false);
-  const [openNewExpense, setOpenNewExpense] = useState(false);
-  const [openNewAllocation, setOpenNewAllocation] = useState(false);
-  const [selectedCampaign, setSelectedCampaign] = useState(null);
-  const [campaignForm, setCampaignForm] = useState({
-    title: '',
-    description: '',
-    targetAmount: '',
-    startDate: '',
-    endDate: '',
-    beneficiaries: '',
-    impactDetails: '',
-    bankDetails: {
-      accountName: '',
-      accountNumber: '',
-      bankName: '',
-      ifscCode: ''
-    },
-    transparencyStatement: ''
+  const [stats, setStats] = useState({
+    totalDonations: 0,
+    totalExpenses: 0,
+    activeCampaigns: 0,
+    completedCampaigns: 0,
   });
-
-  const [expenseForm, setExpenseForm] = useState({
-    amount: '',
-    description: '',
-    category: '',
-    expenseDate: ''
-  });
-
-  const [allocationForm, setAllocationForm] = useState({
-    amount: '',
-    purpose: '',
-    allocationDate: '',
-    status: 'planned'
-  });
-
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [ngoId, setNgoId] = useState(null);
 
   useEffect(() => {
-    const storedNgoId = localStorage.getItem('ngoId');
-    console.log('Retrieved NGO ID from localStorage:', storedNgoId);
-    
-    if (!storedNgoId) {
-      setError('No NGO ID found. Please log in again.');
-      return;
-    }
+    const fetchDashboardData = async () => {
+      try {
+        const storedNgoId = localStorage.getItem('ngoId');
+        if (!storedNgoId) {
+          throw new Error('No NGO ID found. Please log in again.');
+        }
 
-    setNgoId(parseInt(storedNgoId, 10));
-    fetchCampaigns(storedNgoId);
+        // Fetch campaigns
+        const campaignsResponse = await axios.get(`http://localhost:3000/api/campaigns/ngo/${storedNgoId}`);
+        setCampaigns(campaignsResponse.data);
+
+        // Fetch statistics
+        const statsResponse = await axios.get(`http://localhost:3000/api/ngo/${storedNgoId}/statistics`);
+        setStats(statsResponse.data);
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+        setError('Failed to fetch dashboard data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardData();
   }, []);
 
-  const fetchCampaigns = async (id) => {
-    try {
-      const response = await axios.get(`http://localhost:3000/api/campaigns/ngo/${id}`);
-      setCampaigns(response.data);
-    } catch (error) {
-      console.error('Error fetching campaigns:', error);
-      setError('Failed to fetch campaigns');
-    }
-  };
-
-  const handleCreateCampaign = async () => {
-    try {
-      const storedNgoId = localStorage.getItem('ngoId');
-      console.log('Creating campaign for NGO ID:', storedNgoId);
-      
-      if (!storedNgoId) {
-        setError('No NGO ID available. Please log in again.');
-        return;
-      }
-
-      if (!campaignForm.title || !campaignForm.description || !campaignForm.targetAmount || 
-          !campaignForm.startDate || !campaignForm.endDate) {
-        setError('Please fill in all required campaign fields');
-        return;
-      }
-
-      if (!campaignForm.bankDetails?.accountName || !campaignForm.bankDetails?.accountNumber ||
-          !campaignForm.bankDetails?.bankName || !campaignForm.bankDetails?.ifscCode) {
-        setError('Please provide complete bank details');
-        return;
-      }
-
-      const amount = parseFloat(campaignForm.targetAmount);
-      if (isNaN(amount) || amount <= 0) {
-        setError('Please enter a valid positive target amount');
-        return;
-      }
-
-      const startDate = new Date(campaignForm.startDate);
-      const endDate = new Date(campaignForm.endDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      if (startDate < today) {
-        setError('Start date cannot be in the past');
-        return;
-      }
-
-      if (endDate <= startDate) {
-        setError('End date must be after start date');
-        return;
-      }
-
-      const campaignData = {
-        ...campaignForm,
-        ngoId: parseInt(storedNgoId, 10),
-        targetAmount: amount,
-        mediaUrls: [],
-        bankDetails: {
-          accountName: campaignForm.bankDetails.accountName.trim(),
-          accountNumber: campaignForm.bankDetails.accountNumber.trim(),
-          bankName: campaignForm.bankDetails.bankName.trim(),
-          ifscCode: campaignForm.bankDetails.ifscCode.trim()
-        }
-      };
-
-      console.log('Submitting campaign data:', campaignData);
-
-      const response = await axios.post('http://localhost:3000/api/campaigns', campaignData);
-      console.log('Campaign created successfully:', response.data);
-
-      setCampaignForm({
-        title: '',
-        description: '',
-        targetAmount: '',
-        startDate: '',
-        endDate: '',
-        beneficiaries: '',
-        impactDetails: '',
-        bankDetails: {
-          accountName: '',
-          accountNumber: '',
-          bankName: '',
-          ifscCode: ''
-        },
-        transparencyStatement: ''
-      });
-      setOpenNewCampaign(false);
-      
-      fetchCampaigns(storedNgoId);
-      
-      setSuccess('Campaign created successfully!');
-    } catch (error) {
-      console.error('Error creating campaign:', error);
-      const errorMessage = error.response?.data?.error || error.response?.data?.details || 
-                          'Failed to create campaign. Please try again.';
-      setError(errorMessage);
-    }
-  };
-
-  const handleCreateExpense = async () => {
-    try {
-      await axios.post('http://localhost:3000/api/expenses', {
-        ...expenseForm,
-        campaignId: selectedCampaign.id
-      });
-      setOpenNewExpense(false);
-      setExpenseForm({
-        amount: '',
-        description: '',
-        category: '',
-        expenseDate: ''
-      });
-      fetchCampaigns(ngoId);
-    } catch (error) {
-      console.error('Error creating expense:', error);
-    }
-  };
-
-  const handleCreateAllocation = async () => {
-    try {
-      await axios.post('http://localhost:3000/api/fund-allocations', {
-        ...allocationForm,
-        campaignId: selectedCampaign.id
-      });
-      setOpenNewAllocation(false);
-      setAllocationForm({
-        amount: '',
-        purpose: '',
-        allocationDate: '',
-        status: 'planned'
-      });
-      fetchCampaigns(ngoId);
-    } catch (error) {
-      console.error('Error creating fund allocation:', error);
-    }
-  };
+  if (loading) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      </Box>
+    );
+  }
 
   return (
     <Container maxWidth="lg">
-      <Box sx={{ mt: 4, mb: 4 }}>
-        <Typography variant="h4" component="h1" gutterBottom>
-          NGO Dashboard
-        </Typography>
-        <Button
-          variant="contained"
-          color="primary"
-          onClick={() => setOpenNewCampaign(true)}
-          sx={{ mb: 3 }}
-        >
-          Launch New Campaign
-        </Button>
+      <Box sx={{ mt: 4, mb: 8 }}>
+        {/* Welcome Section */}
+        <Box sx={{ mb: 6, textAlign: 'center' }}>
+          <Typography variant="h3" component="h1" gutterBottom>
+            Welcome to Your NGO Dashboard
+          </Typography>
+          <Typography variant="subtitle1" color="text.secondary">
+            Manage your campaigns, track donations, and make a difference
+          </Typography>
+        </Box>
 
-        {/* Campaigns Table */}
-        <TableContainer component={Paper} sx={{ mb: 4 }}>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>Title</TableCell>
-                <TableCell>Target Amount</TableCell>
-                <TableCell>Current Amount</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {campaigns.map((campaign) => (
-                <TableRow key={campaign.id}>
-                  <TableCell>{campaign.title}</TableCell>
-                  <TableCell>{campaign.target_amount}</TableCell>
-                  <TableCell>{campaign.current_amount}</TableCell>
-                  <TableCell>{campaign.status}</TableCell>
-                  <TableCell>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={() => {
-                        setSelectedCampaign(campaign);
-                        setOpenNewExpense(true);
-                      }}
-                    >
-                      Add Expense
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      sx={{ ml: 1 }}
-                      onClick={() => {
-                        setSelectedCampaign(campaign);
-                        setOpenNewAllocation(true);
-                      }}
-                    >
-                      Allocate Funds
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
+        {error && (
+          <Paper sx={{ p: 2, mb: 4, bgcolor: 'error.light', color: 'error.contrastText' }}>
+            <Typography>{error}</Typography>
+          </Paper>
+        )}
 
-        {/* New Campaign Dialog */}
-        <Dialog open={openNewCampaign} onClose={() => setOpenNewCampaign(false)} maxWidth="md" fullWidth>
-          <DialogTitle>Launch New Campaign</DialogTitle>
-          <DialogContent>
-            <Grid container spacing={2} sx={{ mt: 1 }}>
-              <Grid item xs={12}>
-                <TextField
-                  required
-                  fullWidth
-                  label="Campaign Title"
-                  value={campaignForm.title}
-                  onChange={(e) => setCampaignForm({ ...campaignForm, title: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <TextField
-                  required
-                  fullWidth
-                  multiline
-                  rows={4}
-                  label="Campaign Description"
-                  value={campaignForm.description}
-                  onChange={(e) => setCampaignForm({ ...campaignForm, description: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  required
-                  fullWidth
-                  type="number"
-                  label="Target Amount"
-                  value={campaignForm.targetAmount}
-                  onChange={(e) => setCampaignForm({ ...campaignForm, targetAmount: e.target.value })}
-                  inputProps={{ min: "0", step: "0.01" }}
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  required
-                  fullWidth
-                  type="date"
-                  label="Start Date"
-                  value={campaignForm.startDate}
-                  onChange={(e) => setCampaignForm({ ...campaignForm, startDate: e.target.value })}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  required
-                  fullWidth
-                  type="date"
-                  label="End Date"
-                  value={campaignForm.endDate}
-                  onChange={(e) => setCampaignForm({ ...campaignForm, endDate: e.target.value })}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <Typography variant="subtitle1" gutterBottom>
-                  Bank Details
+        {/* Quick Stats */}
+        <Grid container spacing={4} sx={{ mb: 6 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ height: '100%', bgcolor: 'primary.light' }}>
+              <CardContent>
+                <Typography color="primary.contrastText" gutterBottom>
+                  Total Donations
                 </Typography>
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  required
-                  fullWidth
-                  label="Account Name"
-                  value={campaignForm.bankDetails.accountName}
-                  onChange={(e) => setCampaignForm({
-                    ...campaignForm,
-                    bankDetails: { ...campaignForm.bankDetails, accountName: e.target.value }
-                  })}
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  required
-                  fullWidth
-                  label="Account Number"
-                  value={campaignForm.bankDetails.accountNumber}
-                  onChange={(e) => setCampaignForm({
-                    ...campaignForm,
-                    bankDetails: { ...campaignForm.bankDetails, accountNumber: e.target.value }
-                  })}
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  required
-                  fullWidth
-                  label="Bank Name"
-                  value={campaignForm.bankDetails.bankName}
-                  onChange={(e) => setCampaignForm({
-                    ...campaignForm,
-                    bankDetails: { ...campaignForm.bankDetails, bankName: e.target.value }
-                  })}
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  required
-                  fullWidth
-                  label="IFSC Code"
-                  value={campaignForm.bankDetails.ifscCode}
-                  onChange={(e) => setCampaignForm({
-                    ...campaignForm,
-                    bankDetails: { ...campaignForm.bankDetails, ifscCode: e.target.value }
-                  })}
-                />
-              </Grid>
-            </Grid>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setOpenNewCampaign(false)}>Cancel</Button>
-            <Button onClick={handleCreateCampaign} variant="contained">
-              Create Campaign
-            </Button>
-          </DialogActions>
-        </Dialog>
+                <Typography variant="h4" component="div" color="primary.contrastText">
+                  ₹{stats.totalDonations?.toLocaleString() || 0}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ height: '100%', bgcolor: 'success.light' }}>
+              <CardContent>
+                <Typography color="success.contrastText" gutterBottom>
+                  Active Campaigns
+                </Typography>
+                <Typography variant="h4" component="div" color="success.contrastText">
+                  {stats.activeCampaigns || 0}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ height: '100%', bgcolor: 'warning.light' }}>
+              <CardContent>
+                <Typography color="warning.contrastText" gutterBottom>
+                  Total Expenses
+                </Typography>
+                <Typography variant="h4" component="div" color="warning.contrastText">
+                  ₹{stats.totalExpenses?.toLocaleString() || 0}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Card sx={{ height: '100%', bgcolor: 'info.light' }}>
+              <CardContent>
+                <Typography color="info.contrastText" gutterBottom>
+                  Completed Campaigns
+                </Typography>
+                <Typography variant="h4" component="div" color="info.contrastText">
+                  {stats.completedCampaigns || 0}
+                </Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
 
-        {/* New Expense Dialog */}
-        <Dialog open={openNewExpense} onClose={() => setOpenNewExpense(false)}>
-          <DialogTitle>Add New Expense</DialogTitle>
-          <DialogContent>
-            <Grid container spacing={2} sx={{ mt: 1 }}>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Amount"
-                  value={expenseForm.amount}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  label="Description"
-                  value={expenseForm.description}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  label="Category"
-                  value={expenseForm.category}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  type="date"
-                  label="Expense Date"
-                  value={expenseForm.expenseDate}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, expenseDate: e.target.value })}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
+        {/* Quick Actions */}
+        <Box sx={{ mb: 6 }}>
+          <Typography variant="h5" gutterBottom>
+            Quick Actions
+          </Typography>
+          <Grid container spacing={2}>
+            <Grid item xs={12} sm={6} md={3}>
+              <Button
+                fullWidth
+                variant="contained"
+                color="primary"
+                onClick={() => navigate('/ngo/ngo-dashboard/campaigns/new')}
+                sx={{ height: '100%', py: 2 }}
+              >
+                Launch New Campaign
+              </Button>
             </Grid>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setOpenNewExpense(false)}>Cancel</Button>
-            <Button onClick={handleCreateExpense} variant="contained">
-              Add Expense
-            </Button>
-          </DialogActions>
-        </Dialog>
+            <Grid item xs={12} sm={6} md={3}>
+              <Button
+                fullWidth
+                variant="contained"
+                color="secondary"
+                onClick={() => navigate('/ngo/ngo-dashboard/expenses/add')}
+                sx={{ height: '100%', py: 2 }}
+              >
+                Add Expense
+              </Button>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Button
+                fullWidth
+                variant="contained"
+                color="success"
+                onClick={() => navigate('/ngo/ngo-dashboard/statistics')}
+                sx={{ height: '100%', py: 2 }}
+              >
+                View Statistics
+              </Button>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Button
+                fullWidth
+                variant="contained"
+                color="info"
+                onClick={() => navigate('/ngo/ngo-dashboard/transactions')}
+                sx={{ height: '100%', py: 2 }}
+              >
+                View Transactions
+              </Button>
+            </Grid>
+          </Grid>
+        </Box>
 
-        {/* New Fund Allocation Dialog */}
-        <Dialog open={openNewAllocation} onClose={() => setOpenNewAllocation(false)}>
-          <DialogTitle>Allocate Funds</DialogTitle>
-          <DialogContent>
-            <Grid container spacing={2} sx={{ mt: 1 }}>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  type="number"
-                  label="Amount"
-                  value={allocationForm.amount}
-                  onChange={(e) => setAllocationForm({ ...allocationForm, amount: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  label="Purpose"
-                  value={allocationForm.purpose}
-                  onChange={(e) => setAllocationForm({ ...allocationForm, purpose: e.target.value })}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  type="date"
-                  label="Allocation Date"
-                  value={allocationForm.allocationDate}
-                  onChange={(e) => setAllocationForm({ ...allocationForm, allocationDate: e.target.value })}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
-            </Grid>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setOpenNewAllocation(false)}>Cancel</Button>
-            <Button onClick={handleCreateAllocation} variant="contained">
-              Allocate Funds
-            </Button>
-          </DialogActions>
-        </Dialog>
+        {/* Recent Campaigns */}
+        <Box sx={{ mb: 6 }}>
+          <Typography variant="h5" gutterBottom>
+            Recent Campaigns
+          </Typography>
+          <TableContainer component={Paper}>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Campaign</TableCell>
+                  <TableCell>Target Amount</TableCell>
+                  <TableCell>Raised</TableCell>
+                  <TableCell>Progress</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {campaigns.slice(0, 5).map((campaign) => (
+                  <TableRow key={campaign.id}>
+                    <TableCell>{campaign.title}</TableCell>
+                    <TableCell>₹{campaign.target_amount?.toLocaleString()}</TableCell>
+                    <TableCell>₹{campaign.current_amount?.toLocaleString()}</TableCell>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <Box
+                          sx={{
+                            width: '100%',
+                            mr: 1,
+                            height: 8,
+                            borderRadius: 1,
+                            bgcolor: 'grey.300',
+                          }}
+                        >
+                          <Box
+                            sx={{
+                              width: `${Math.min((campaign.current_amount / campaign.target_amount) * 100, 100)}%`,
+                              height: '100%',
+                              borderRadius: 1,
+                              bgcolor: 'primary.main',
+                            }}
+                          />
+                        </Box>
+                        <Box sx={{ minWidth: 35 }}>
+                          <Typography variant="body2" color="text.secondary">
+                            {Math.round((campaign.current_amount / campaign.target_amount) * 100)}%
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Box
+                        sx={{
+                          px: 1,
+                          py: 0.5,
+                          borderRadius: 1,
+                          display: 'inline-block',
+                          bgcolor: campaign.status === 'active' ? 'success.light' : 'info.light',
+                          color: campaign.status === 'active' ? 'success.dark' : 'info.dark',
+                        }}
+                      >
+                        {campaign.status}
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => navigate(`/ngo/dashboard/campaigns/${campaign.id}`)}
+                      >
+                        View Details
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+          {campaigns.length > 5 && (
+            <Box sx={{ mt: 2, textAlign: 'right' }}>
+              <Button
+                color="primary"
+                onClick={() => navigate('/ngo/dashboard/campaigns')}
+              >
+                View All Campaigns
+              </Button>
+            </Box>
+          )}
+        </Box>
       </Box>
     </Container>
   );
 };
 
-export default NGODashboard; 
+export default NGODashboard;
