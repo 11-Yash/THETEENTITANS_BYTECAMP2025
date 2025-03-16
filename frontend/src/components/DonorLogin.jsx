@@ -1,7 +1,9 @@
 import React, { useState } from "react";
 import axios from "axios";
+import { useNavigate } from "react-router-dom";
 
 const DonorLogin = () => {
+  const navigate = useNavigate();
   const [formData, setFormData] = useState({
     email: "",
     password: "",
@@ -23,11 +25,14 @@ const DonorLogin = () => {
       const response = await axios.post("http://localhost:3000/api/donorlogin", formData);
       console.log("Login Successful:", response.data);
 
-      // Store user token/session (if backend sends JWT token)
-      localStorage.setItem("donorToken", response.data.token);
+      // Store donor information
+      localStorage.setItem("donorId", response.data.user.id);
+      localStorage.setItem("donorName", response.data.user.name);
+      localStorage.setItem("isLoggedIn", "true");
+      localStorage.setItem("userType", "donor");
 
-      // Redirect to dashboard after successful login
-      window.location.href = "/";
+      // Use navigate for programmatic navigation
+      navigate("/donor/dashboard");
     } catch (err) {
       console.error("Login Failed:", err.response?.data?.message || "Something went wrong");
       setError(err.response?.data?.message || "Invalid email or password");
